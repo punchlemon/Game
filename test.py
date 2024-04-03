@@ -1,26 +1,25 @@
-from OpenGL.GL import *
-from OpenGL.GLUT import *
-from OpenGL.GLU import *
-import numpy as np
 import glfw
+from OpenGL.GL import *
+import numpy as np
 
 class Object:
     def __init__(self, position=[0, 0, 0], angle=[0, 0, 0]):
-        self.position = position
-        self.angle = angle
-        self.verocity = [0, 0, 0]
+        self.position = np.array(position, dtype=np.float32)
+        self.angle = np.array(angle, dtype=np.float32)
+        self.velocity = np.array([0, 0, 0], dtype=np.float32)
+
     def rotate(self, rotation_angle):
-        self.rotation_speed = rotation_angle
-        self.angle = [x + y for x, y in zip(self.angle, rotation_angle)]
+        self.angle += rotation_angle
+
     def move(self, moving_speed):
-        self.moving_speed = moving_speed
-        self.position = [x + y for x, y in zip(self.position, moving_speed)]
+        self.position += moving_speed
 
 class Thing(Object):
     def __init__(self, filename, position=[0, 0, 0], angle=[0, 0, 0]):
         super().__init__(position, angle)
         self.filename = filename
         self.vertices, self.faces, self.normals = self.load_obj()
+
     def load_obj(self):
         vertices = []
         faces = []
@@ -31,24 +30,25 @@ class Thing(Object):
                     vertices.append(list(map(float, line.strip().split()[1:])))
                 elif line.startswith('f '):
                     face = [int(vertex.split('/')[0]) - 1 for vertex in line.strip().split()[1:]]
-                    if len(face) == 4:  # 4つの頂点からなる面を三角形に分割
+                    if len(face) == 4:  # Triangulate quads
                         faces.append([face[0], face[1], face[2]])
                         faces.append([face[0], face[2], face[3]])
                     else:
                         faces.append(face)
-        for face in faces: # calculate normals
+        for face in faces:
             v1 = np.array(vertices[face[0]])
             v2 = np.array(vertices[face[1]])
             v3 = np.array(vertices[face[2]])
             normal = np.cross(v2 - v1, v3 - v1)
             normals.append(normal / np.linalg.norm(normal))
         return vertices, faces, normals
+
     def disp(self):
         glPushMatrix()
         glTranslatef(*self.position)
-        glRotatef(self.angle[0], 1, 0, 0)  # x軸周りの回転
-        glRotatef(self.angle[1], 0, 1, 0)  # y軸周りの回転
-        glRotatef(self.angle[2], 0, 0, 1)  # z軸周りの回転
+        glRotatef(self.angle[0], 1, 0, 0)
+        glRotatef(self.angle[1], 0, 1, 0)
+        glRotatef(self.angle[2], 0, 0, 1)
         for i, face in enumerate(self.faces):
             glBegin(GL_TRIANGLES)
             glNormal3fv(self.normals[i])
@@ -58,53 +58,55 @@ class Thing(Object):
         glPopMatrix()
 
 class Light(Object):
-    def __init__(self, position=[1, 1, 2], angle=[0, 0, 0], diffuse=[1, 1, 1, 1]):
-        super().__init__(position, angle)
-        self.diffuse = diffuse    # 光の強度
-        self.light_id = None
-    def disp(self):
+    def __init__(self, position=[0, -3.8, -1.3], diffuse=[1, 1, 1, 1]):
+        super().__init__(position)
+        self.diffuse = diffuse
+
+    def setup(self):
         glPushMatrix()
         glTranslatef(*self.position)
-        self.light_id = GL_LIGHT0
         glEnable(GL_LIGHTING)
-        glEnable(self.light_id)
-        glLightfv(self.light_id, GL_POSITION, self.position + [1])
-        glLightfv(self.light_id, GL_DIFFUSE, self.diffuse)
-        quadric = gluNewQuadric()  # 新しい球体オブジェクトを生成
-        gluSphere(quadric, 0.1, 30, 30)  # 半径0.5の球を描画
+        glEnable(GL_LIGHT0)
+        glLightfv(GL_LIGHT0, GL_POSITION, [*self.position, 1.0])
+        glLightfv(GL_LIGHT0, GL_DIFFUSE, self.diffuse)
         glPopMatrix()
     def disable(self):
-        glDisable(self.light_id)
+        glDisable(GL_LIGHT0)
 
-class Camera(Object):
-    def __init__(self, position=[0, 0, 5], angle=[0, 0, 0]):
-        super().__init__(position, angle)
-        self.center = [self.position[i] + np.cos(np.radians(self.angle[i])) for i in range(3)]
-        self.center = [0, 0, -10]
-        self.up = [0, 1, 0]
+class Camera:
+    def __init__(self, position=[0, 0, 0], angle=[0, 0, 0]):
+        self.position = np.array(position, dtype=np.float32)
+        self.angle = np.array(angle, dtype=np.float32)
+        self.center = np.array([0, 0, -10], dtype=np.float32)
+        self.up = np.array([0, 1, 0], dtype=np.float32)
+
     def move(self, moving_speed):
-        # glPushMatrix()
-        # gluNewQuadric()
-        super().move(moving_speed)
-        self.eye = self.moving_speed
-        self.center = [x + y for x, y in zip(self.center, moving_speed)]
-        self.up = [0, 1, 0]
-        gluLookAt(*self.eye, *self.center, *self.up)
+        forward = self.center - self.position
+        forward /= np.linalg.norm(forward)
+        self.position += forward * moving_speed[2]
+        self.center += forward * moving_speed[2]
 
-def draw_obj(things, lights):
-    for light in lights:
-        light.disp()
-    for thing in things:
-        thing.disp()
-    for light in lights:
-        light.disable()
-    # glPopMatrix()
+        right = np.cross(forward, self.up)
+        right /= np.linalg.norm(right)
+        self.position += right * moving_speed[0]
+        self.center += right * moving_speed[0]
 
-def change_target():
-    global target_number, objects_length
-    target_number += 1
-    if target_number == objects_length:
-        target_number = 0
+        self.position += self.up * moving_speed[1]
+        self.center += self.up * moving_speed[1]
+
+    def lookAt(self):
+        matrix = np.identity(4, dtype=np.float32)
+        forward = self.center - self.position
+        forward /= np.linalg.norm(forward)
+        side = np.cross(forward, self.up)
+        side /= np.linalg.norm(side)
+        up = np.cross(side, forward)
+
+        matrix[0, :3] = side
+        matrix[1, :3] = up
+        matrix[2, :3] = -forward
+
+        glMultMatrixf(matrix.T)
 
 def key_callback(window, key, scancode, action, mods):
     global angle, position
@@ -119,8 +121,6 @@ def key_callback(window, key, scancode, action, mods):
             angle[0] = 1
         elif key == glfw.KEY_ESCAPE:
             glfw.set_window_should_close(window, True)
-        elif key == glfw.KEY_TAB:
-            change_target()
         elif key == glfw.KEY_S:
             position[2] = 0.01
         elif key == glfw.KEY_W:
@@ -145,24 +145,11 @@ def key_callback(window, key, scancode, action, mods):
         elif key == glfw.KEY_A or key == glfw.KEY_D:
             position[0] = 0
 
-
-    # partial_key_callback = partial(key_callback, angle, position, target_number, objects_length)
-    glfw.set_key_callback(window, key_callback)  # コールバック関数を登録
-
-
 angle = [0, 0, 0]
 position = [0, 0, 0]
-objects_length = 0
-target_number = 0
 
 def main():
-    global angle, position, objects_length, target_number
-    camera = Camera(position=[0, 0, 5])
-    lights = [Light(position=[10, 0, 10], diffuse=[1, 1, 1, 1])]
-    things = [Thing("monkey.obj")]
-    objects = [camera] + lights + things
-    objects_length = len(objects)
-
+    global angle, position
     if not glfw.init():
         return
 
@@ -174,28 +161,28 @@ def main():
 
     glEnable(GL_DEPTH_TEST)
 
-    gluPerspective(45, (500 / 600), 0.1, 50.0)
+    thing = Thing("monkey.obj")
+    light = Light()
+    camera = Camera()
 
-    # partial_key_callback = partial(key_callback, angle, position, target_number, objects_length)
-    glfw.set_key_callback(window, key_callback)  # コールバック関数を登録
-    gluLookAt(*camera.position, *camera.center, *camera.up)
+    glfw.set_key_callback(window, key_callback)
+
     while not glfw.window_should_close(window):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        for i, object in enumerate(objects):
-            if i == target_number:
-                object.move(position)
-                object.rotate(angle)
-            else:
-                object.move([0, 0, 0])
-                object.rotate([0, 0, 0])
-        draw_obj(things, lights)
+
+        thing.move(position)
+        thing.rotate(angle)
+
+        light.setup()
+
+        glLoadIdentity()
+        # camera.move(position)
+        camera.lookAt()
+
+        thing.disp()
 
         glfw.swap_buffers(window)
         glfw.poll_events()
-
-        for object in objects:
-            print(object.position, end="")
-        print()
 
     glfw.terminate()
 
